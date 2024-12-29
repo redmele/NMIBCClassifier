@@ -60,8 +60,6 @@ The classifier returns a datafram with 6 columns:
 
 `normalized_difference` measures how distinct a sample is from other consensus classes. It ranges from 0 to 1, where 0 indicates that the sample is too close to other consensus classes to be confidently assigned a single class, and 1 indicates that the sample is highly representative of its assigned class and well-separated from others. The normalized difference is calculated as:
 
-\[
-\frac{\text{correlation to nearest centroid} - \text{correlation to second nearest centroid}}{\text{correlation to nearest centroid}}
-\]
+$ \frac{\text{correlation to nearest centroid} - \text{correlation to second nearest centroid}}{\text{correlation to nearest centroid}} $
 
 The remaining columns `correlation_to_consensus_cluster_X`, provide the Pearson correlation values between each sample and each consensus class, where `X` represents the class number. These values help to understand the relationship between the sample and all consensus classes.
