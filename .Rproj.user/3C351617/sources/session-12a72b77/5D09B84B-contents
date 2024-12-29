@@ -1,0 +1,69 @@
+####TCGA MIBC 数据 是否富含cluster 2 ####
+#### 1,2,3,三群的数量分别为119,78,231 ####
+#### 从生存分析结果来看，三群在一起，P=0.071，群2最差，13分不开 ####
+#### 1,2 单独的生存分析 P=0.038 ####
+#### 2,3 单独的生存分析 P=0.04  ####
+expr_TCGA <-read.csv("D:/OneDrive - 中山大学/R_workplace/processed_data/TCGA-BLCAoutput_mRNA_lncRNA_expr/TCGA-BLCA_mrna_expr_fpkm.csv")
+max(expr_TCGA[,-1])
+
+rownames(expr_TCGA) <- expr_TCGA[,1]
+expr_TCGA <- expr_TCGA[,-1]
+expr_TCGA <- t(expr_TCGA)
+
+centroids <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/model1/建模_centroid.RDS")
+# 定义pearson函数
+pearson_correlation <- function(x, y) {
+  cor(x, y, method = "pearson")
+}
+
+# 找到共同的基因
+common_genes <- intersect(colnames(centroids), colnames(expr_TCGA))
+  
+predictions <- apply(expr_TCGA, 1, function(sample) {
+    sample <- sample[common_genes]
+    correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+    names(which.max(correlations))
+  })
+  
+result <- as.data.frame(cbind(rownames(expr_TCGA),predictions))
+colnames(result) <- c("sample","mcl_cluster")
+
+table(as.factor(result$mcl_cluster))
+library(dplyr)
+clinic_TCGA <- read.csv("D:/OneDrive - 中山大学/R_workplace/processed_data/TCGA-BLCAoutput_mRNA_lncRNA_expr/TCGA-BLCA_clinicalSE.csv")
+test <- clinic_TCGA[,c(1,53,58)]
+
+result$sample <- gsub("\\.","\\-",result$sample)
+result <- result %>% 
+  left_join(test,by = c("sample"="barcode"))
+
+result <- result[-203,]
+result <- result %>% 
+  mutate(vital_status=recode(vital_status,
+                "Dead"="1",
+                "Alive"="0"))
+
+# 去除死亡时间为NA的样本
+result <- result[-c(40,319),]
+
+#  用最大时间替换存活的NA time
+result$days_to_death[is.na(result$days_to_death)] <- max(result$days_to_death, na.rm = TRUE)  # 用最大随访时间替换 NA
+result$vital_status <- as.numeric(result$vital_status)
+
+library(survival)
+library("survminer")
+library(RColorBrewer)
+result_1_2 <- result[result$mcl_cluster%in%c(1,2),]
+result_3_2 <- result[result$mcl_cluster%in%c(3,2),]
+
+# 死亡
+km_fit <- survfit(Surv(days_to_death,vital_status) ~ mcl_cluster, data = result_1_2 )
+
+ggsurvplot(km_fit,
+           pval = TRUE, conf.int = TRUE,
+           risk.table = TRUE, # 添加风险表
+           risk.table.col = "strata", # 根据分层更改风险表颜色
+           linetype = "strata", # 根据分层更改线型
+           surv.median.line = "hv", # 同时显示垂直和水平参考线
+           ggtheme = theme_bw(), # 更改ggplot2的主题
+           palette = brewer.pal(n=8,name = "Set2"))#定义颜色

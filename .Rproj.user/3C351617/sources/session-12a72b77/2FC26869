@@ -1,0 +1,26 @@
+{
+    "id": "2FC26869",
+    "path": "D:/OneDrive - 中山大学/R_workplace/MCL/MCL_构建classifier_log.R",
+    "project_path": null,
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1735456247837.0,
+    "source_on_save": false,
+    "relative_order": 3,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "644,0",
+        "scrollLine": "0"
+    },
+    "folds": "1|45|75|0|\n76|12|148|1|\n149|16|159|0|\n160|18|173|0|\n283|30|301|0|\n306|56|566|0|\n932|37|1185|0|\n933|118|1171|0|\n1186|8|1229|0|\n",
+    "lastKnownWriteTime": 1733799425,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1735470534373,
+    "read_only": false,
+    "read_only_alternatives": []
+}

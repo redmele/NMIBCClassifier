@@ -1,0 +1,104 @@
+# pearson correlation
+centroids <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/model1/建模_centroid.RDS")
+
+classifyNMIBC <- function(data,cor.cut = 0.1) {
+  # 找到centroids和输入数据的共同基因
+  common_genes <- intersect(colnames(centroids), colnames(data))
+  
+  pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+  }
+  # 初始化结果矩阵
+  results <- t(apply(data, 1, function(sample) {
+    # 提取样本中共同基因的表达值
+    sample <- sample[common_genes]
+    
+    # 计算样本与每个centroid的相关性
+    correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+    
+    # 找到相关性最高的分类
+    max_correlation <- max(correlations)
+    classification <- rownames(centroids)[which.max(correlations)]  # 确保分类是centroids的行名
+    
+    # 找到次大相关性
+    second_max_correlation <- sort(correlations, decreasing = TRUE)[2]
+    
+    # 计算归一化差值
+    normalized_difference <- (max_correlation - second_max_correlation) / max_correlation
+    
+    # 计算最大相关类别的P值
+    nearest_centroid <- centroids[classification, common_genes]  # 修正索引顺序
+    cor_pval <- cor.test(sample, nearest_centroid)$p.value
+    # 如果 max_correlation 小于 cor.cut，则将 classification 设置为 NA
+    if (max_correlation < cor.cut) {
+      classification <- NA
+    }
+    # 返回分类结果、相关性、归一化差值和P值
+    c(
+      classification = classification,
+      correlations,
+      normalized_difference = normalized_difference,
+      p_value = cor_pval
+    )
+  }))
+  
+  # 转换为数据框
+  results_df <- as.data.frame(results)
+  
+  # 修改列名
+  colnames(results_df) <- c(
+    "consensus_cluster",
+    "correlation_to_consensus_cluster_1",
+    "correlation_to_consensus_cluster_2",
+    "correlation_to_consensus_cluster_3",
+    "normalized_difference",
+    "p_value"
+  )
+  
+  # 返回结果
+  return(results_df)
+}
+test <- classifyNMIBC(expr_TCGA)
+
+#### 测试 ####
+load("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_matrix.RData")
+
+expr_matrices <- list(
+  expr_dejong_A = as.matrix(expr_dejong_A),
+  expr_dejong_B = as.matrix(expr_dejong_B),
+  expr_GSE120736 = as.matrix(expr_GSE120736),
+  expr_GSE128959 = as.matrix(expr_GSE128959),
+  expr_GSE13507 = as.matrix(expr_GSE13507),
+  expr_GSE154261_73 = as.matrix(expr_GSE154261_73),
+  expr_GSE154261_26 = as.matrix(expr_GSE154261_26),
+  expr_GSE163209 = as.matrix(expr_GSE163209),
+  expr_GSE31684 = as.matrix(expr_GSE31684),
+  expr_GSE32549 = as.matrix(expr_GSE32549),
+  expr_GSE48075 = as.matrix(expr_GSE48075),
+  expr_GSE83586 = as.matrix(expr_GSE83586),
+  expr_UROMOL = as.matrix(expr_UROMOL)
+)
+
+expr_matrices <- lapply(expr_matrices, t)
+sample_ID <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/cluster_result_NMIBC_2")
+
+expr_NMIBC <- list()
+
+for (name in names(expr_matrices)){
+  data <- expr_matrices[[name]]
+  data <- as.data.frame(data)
+  data$sample <- rownames(data)
+  data <-  data[data$sample%in%sample_ID$Baylor_Lund.ID,]
+  data <- data[,-ncol(data)]
+  expr_NMIBC[[name]] <- data
+}
+
+sample_cluster <- list()
+
+for (name in names(expr_NMIBC) ){
+  data <- expr_NMIBC[[name]]
+  result <- classifyNMIBC(data)
+  sample_cluster[[name]] <- result
+}
+
+sample_result <- do.call(rbind,sample_cluster)

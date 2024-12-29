@@ -1,0 +1,2063 @@
+#### log后重新分类的结果建模 ####
+#### 1 基因差异表达分析  基于cluster A vs Others...... ####
+# 在EUA中，合并的是所选的用于建模的数据库的共有基因
+# 添加分组信息
+setwd("D:/OneDrive - 中山大学/R_workplace/MCL/dataset")
+load("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_matrix_2.RData")
+P_all<- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/P_NMIBC_5group_log.RDS")
+P_0.05 <- P_all[which(P_all$p_value<0.05),]
+colnames(P_0.05)[c(1,2)] <- c("mcl_cluster","sample")
+
+sample_cluster_annotation <- cbind(P_0.05$sample,P_0.05$mcl_cluster)
+colnames(sample_cluster_annotation) <- c("sample","mcl_cluster")
+
+# 加入数据库信息
+annotiation_cluster <- readRDS("progressed_data/cluster_result_NMIBC")
+
+## 二者元素一致但次序不同
+# 找到起始和结束位置
+start <- regexpr("expr_", rownames(annotiation_cluster)) + nchar("expr_")
+end <- regexpr("_clustering", rownames(annotiation_cluster)) - 1
+# 提取中间的字符串
+annotiation_cluster$dataset <- substr(rownames(annotiation_cluster), start, end)
+annotiation_cluster <- annotiation_cluster[,c(1,7)]
+anyDuplicated(P_0.05$sample)
+anyDuplicated(annotiation_cluster$Baylor_Lund.ID)
+annotiation_cluster_non_4321 <- annotiation_cluster[which(!annotiation_cluster$dataset=="EM_4321"),]
+  
+sample_dataset <- merge(P_0.05,annotiation_cluster_non_4321,by.x="sample",by.y="Baylor_Lund.ID")
+sample_dataset_cluster1 <- sample_dataset[which(sample_dataset$mcl_cluster=="1"),]
+table(sample_dataset_cluster1$dataset)
+sample_dataset_cluster2 <- sample_dataset[which(sample_dataset$mcl_cluster=="2"),]
+table(sample_dataset_cluster2$dataset)
+sample_dataset_cluster3 <- sample_dataset[which(sample_dataset$mcl_cluster=="3"),]
+table(sample_dataset_cluster3$dataset)
+table(sample_dataset$dataset)
+# 所有数据库中，归类的样本数目 UROMOL>163209>dejongA>dejong_B
+# 其中UROMOL dejongA和dejongB具有三种不同的分类
+
+expr_matrices <- list(
+  expr_dejong_A = as.matrix(expr_dejong_A),
+  expr_dejong_B = as.matrix(expr_dejong_B),
+  expr_GSE120736 = as.matrix(expr_GSE120736),
+  expr_GSE128959 = as.matrix(expr_GSE128959),
+  expr_GSE13507 = as.matrix(expr_GSE13507),
+  expr_GSE154261_73 = as.matrix(expr_GSE154261_73),
+  expr_GSE154261_26 = as.matrix(expr_GSE154261_26),
+  expr_GSE163209 = as.matrix(expr_GSE163209),
+  expr_GSE31684 = as.matrix(expr_GSE31684),
+  expr_GSE32549 = as.matrix(expr_GSE32549),
+  expr_GSE48075 = as.matrix(expr_GSE48075),
+  expr_GSE83586 = as.matrix(expr_GSE83586),
+  expr_UROMOL = as.matrix(expr_UROMOL)
+)
+expr_matrices <- lapply(expr_matrices, t)
+
+expr_representative <- list()
+
+# 提前提取样本名称，减少在循环中重复计算
+sample_names <- P_0.05$sample
+# 使用 lapply 进行矢量化操作
+
+for (i in seq_along(expr_matrices)) {
+  df <- expr_matrices[[i]]
+  df <- df[which(rownames(df) %in% P_0.05$sample), ]
+  df <- as.data.frame(df)
+  df$sample <- rownames(df)
+  df <- merge(df, sample_cluster_annotation, by.x = "sample", by.y = "sample")
+  rownames(df) <- df$sample
+  df <- df[, -1]
+  # 将数据框转换为矩阵
+  expr_representative[[names(expr_matrices)[i]]] <- df
+}
+
+# expr_representative 内的是数据框形式
+saveRDS(expr_representative,"D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS")
+
+#### 差异分析函数 ####
+library(limma)
+library(pROC)
+library(dplyr)
+perform_analysis <- function(expr_data, group_labels) {
+  data <- as.data.frame(expr_data)
+  data <- data %>% mutate_all(as.numeric)
+  data <- as.matrix(data)
+  print(dim(data))
+  
+  # 创建设计矩阵
+  design <- model.matrix(~0 + group_labels)
+  colnames(design) <- levels(group_labels)
+  
+  # 定义对比矩阵
+  contrast.matrix <- makeContrasts(
+    Group1_vs_Others = Group1 - (Group2 + Group3)/2,
+    Group2_vs_Others = Group2 - (Group1 + Group3)/2,
+    Group3_vs_Others = Group3 - (Group1 + Group2)/2,
+    levels = design
+  )
+  
+  # 使用LIMMA进行差异表达分析
+  fit <- lmFit(data, design)
+  fit2 <- contrasts.fit(fit, contrast.matrix)
+  fit2 <- eBayes(fit2)
+  
+  # 提取p值和fold change
+  results_list <- list(
+    Group1_vs_Others = topTable(fit2, coef="Group1_vs_Others", number=Inf),
+    Group2_vs_Others = topTable(fit2, coef="Group2_vs_Others", number=Inf),
+    Group3_vs_Others = topTable(fit2, coef="Group3_vs_Others", number=Inf)
+  )
+  
+  # 计算AUC
+  auc_values <- matrix(0, nrow = nrow(expr_data), ncol = length(levels(group_labels)))
+  colnames(auc_values) <- levels(group_labels)
+  
+  data <- t(data)
+  
+  for (class in levels(group_labels)) {
+    binary_group <- ifelse(group_labels == class, 1, 0)
+    if (length(unique(binary_group)) == 2) {
+      for (i in 1:ncol(data)) {
+        gene_expression <- data[, i]
+        if (is.numeric(gene_expression)) {
+          roc_obj <- roc(binary_group, gene_expression)
+          auc_values[i, class] <- auc(roc_obj)
+        } else {
+          cat("警告: 基因", i, "的表达值不是数值型。\n")
+        }
+      }
+    } else {
+      cat("警告: 类别", class, "在binary_group中没有两个水平。\n")
+    }
+  }
+  
+  # 将结果存储在数据框中
+  results_df <- data.frame(
+    Gene = rownames(results_list$Group1_vs_Others),
+    Group1_vs_Others_P_Value = results_list$Group1_vs_Others$P.Value,
+    Group1_vs_Others_LogFC = results_list$Group1_vs_Others$logFC,
+    Group2_vs_Others_P_Value = results_list$Group2_vs_Others$P.Value,
+    Group2_vs_Others_LogFC = results_list$Group2_vs_Others$logFC,
+    Group3_vs_Others_P_Value = results_list$Group3_vs_Others$P.Value,
+    Group3_vs_Others_LogFC = results_list$Group3_vs_Others$logFC,
+    AUC_Group1 = auc_values[, "Group1"],
+    AUC_Group2 = auc_values[, "Group2"],
+    AUC_Group3 = auc_values[, "Group3"]
+  )
+  
+  return(results_df)
+}
+#### 1.1 UROMOL ####
+expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+# 输入的矩阵为表达矩阵，行基因，列为样本，并且输入的样本量要与groupA长度一致
+group_UROMOL <- as.factor(expr_UROMOL_mcl$mcl_cluster)
+levels(group_UROMOL) <- paste0("Group", levels(group_UROMOL))  # 添加前缀
+
+expr_UROMOL_mcl <- expr_UROMOL_mcl[,-ncol(expr_UROMOL_mcl)]
+expr_UROMOL_mcl <- t(expr_UROMOL_mcl)
+
+result_UROMOL <- perform_analysis(expr_data = expr_UROMOL_mcl, group_labels = group_UROMOL)
+
+#### 1.2 dejong A ####
+expr_dejong_A_mcl <- expr_representative[["expr_dejong_A"]]
+# 创建分组信息向量
+group_dejong_A <- as.factor(expr_dejong_A_mcl$mcl_cluster)
+levels(group_dejong_A) <- paste0("Group", levels(group_dejong_A))  # 添加前缀
+# 输入的矩阵为表达矩阵，行基因，列为样本，并且输入的样本量要与groupA长度一致
+expr_dejong_A_mcl <- expr_dejong_A_mcl[,-ncol(expr_dejong_A_mcl)]
+expr_dejong_A_mcl <- t(expr_dejong_A_mcl)
+
+expr_dejong_A_mcl <- log2(expr_dejong_A_mcl+1)
+max(expr_dejong_A_mcl)
+
+result_dejong_A <- perform_analysis(expr_data = expr_dejong_A_mcl, group_labels = group_dejong_A)
+
+#### common genes 应该是所有数据集的交集？ ####
+common_genes <- intersect(result_UROMOL$Gene, result_dejong_A$Gene)
+# 分组数量
+group_count <- length(levels(group_dejong_A))
+# 初始化存储合并结果的数据框
+combined_results <- data.frame(Gene = common_genes)
+
+group_comparisons <- c("Group1_vs_Others", "Group2_vs_Others", 
+                       "Group3_vs_Others")
+
+# 初始化一个列表来存储合并结果
+combined_results <- list()
+
+# 对每个组间对比进行合并
+for (comparison in group_comparisons) {
+  # 使用Stouffer的方法合并p值
+  p_values_combined <- sapply(common_genes, function(gene) {
+    p1 <- result_UROMOL[[paste0(comparison, "_P_Value")]][result_UROMOL$Gene == gene]
+    p2 <- result_dejong_A[[paste0(comparison, "_P_Value")]][result_dejong_A$Gene == gene]
+    combined_p <- pnorm((qnorm(p1) + qnorm(p2)) / sqrt(2))
+    combined_p
+  })
+  # 计算平均fold change
+  fold_changes_combined <- rowMeans(cbind(
+    result_UROMOL[[paste0(comparison, "_LogFC")]][result_UROMOL$Gene %in% common_genes],
+    result_dejong_A[[paste0(comparison, "_LogFC")]][result_dejong_A$Gene %in% common_genes]
+  ))
+  # 提取 AUC 值
+  group <- strsplit(comparison, "_vs_")[[1]][1]
+  auc_values_UROMOL <- result_UROMOL[[paste0("AUC_", group)]][result_UROMOL$Gene %in% common_genes]
+  auc_values_dejong_A <- result_dejong_A[[paste0("AUC_", group)]][result_dejong_A$Gene %in% common_genes]
+  # 将结果添加到数据框中
+  combined_results[[comparison]] <- data.frame(
+    Gene = common_genes,
+    Combined_P_Value = p_values_combined,
+    Mean_Fold_Change = fold_changes_combined,
+    AUC_UROMOL = auc_values_UROMOL,
+    AUC_dejong_A = auc_values_dejong_A
+  )
+}
+
+# 如果需要，可以将所有对比的结果合并为一个数据框
+combined_results_df <- do.call(rbind, lapply(names(combined_results), function(name) {
+  df <- combined_results[[name]]
+  df$Comparison <- name
+  return(df)
+}))
+###行名未重复的，因而可以构建可以数据框
+combined_results_df[which(combined_results_df$Gene=="VIM"),]
+#Gene Combined_P_Value Mean_Fold_Change AUC_UROMOL AUC_dejong_A       Comparison
+#VIM   VIM     2.130876e-06       0.04991394  0.8394013    0.6704545 Group1_vs_Others
+#VIM1  VIM     1.639709e-05       2.34000890  0.7676991    0.5494505 Group2_vs_Others
+#VIM2  VIM     1.833611e-08      -0.92457069  0.8394625    0.8152174 Group3_vs_Others
+
+#### 选择p<0.05 以及 AUC至少在一个数据集>0.6 的基因 ####
+# 假设 combined_results_df 已经包含所有合并后的结果
+# 初始化一个数据框来存储筛选后的基因
+selected_genes <- data.frame()
+
+# 获取所有的比较名称
+comparisons <- unique(combined_results_df$Comparison)
+
+# 对每个组间对比进行筛选
+for (comparison in comparisons) {
+  # 筛选出当前比较的行
+  df <- combined_results_df[combined_results_df$Comparison == comparison, ]
+  # 筛选出符合条件的行
+  selected_rows <- df[
+    df$Combined_P_Value < 0.05 & (df$AUC_UROMOL > 0.6 | df$AUC_dejong_A > 0.6),
+  ]
+  # 将符合条件的行添加到结果数据框中
+  selected_genes <- rbind(selected_genes, selected_rows)
+}
+
+# 对结果数据框按 Group 分组，并根据相应的 mean_fold_change_group 列排序
+selected_genes <- selected_genes %>%
+  group_by(Comparison) %>%
+  arrange(
+    desc(Mean_Fold_Change),
+    .by_group = TRUE
+  )
+
+# 假设 combined_results_df 已经包含所有合并后的结果
+# 初始化一个数据框来存储筛选后的基因
+top200_genes <- data.frame()
+
+# 使用 dplyr 的 group_by 和 do 函数进行分组操作
+top200_genes <- combined_results_df %>%
+  group_by(Comparison) %>%
+  do({
+    # 对每个分组进行操作
+    df <- .
+    
+    # 按 Mean_Fold_Change 降序排列，取前 200 行
+    top_200 <- df %>%
+      arrange(desc(Mean_Fold_Change)) %>%
+      head(200)
+    
+    # 按 Mean_Fold_Change 升序排列，取前 200 行
+    bottom_200 <- df %>%
+      arrange(Mean_Fold_Change) %>%
+      head(200)
+    
+    # 合并 top_200 和 bottom_200
+    bind_rows(top_200, bottom_200)
+  })
+
+saveRDS(top200_genes,"progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS")
+
+#### pearson centroid 构建建模基因集 ####
+expr_representative <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS")
+top200_genes <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS")
+# 选择基因 
+# 每组选择10-125个上调或下调基因，以5个为间隔，共6组对比，也即12组上下调基因，每次增加60个基因 
+library(dplyr)
+gene_for_model <- list()
+for (i in c(0:38)){
+  top_genes_per_group <- top200_genes %>%
+    group_by(Comparison) %>%
+    do(bind_rows(
+      dplyr::slice(., 1:(10+5*i)),
+      dplyr::slice(., 201:(210+5*i))
+    )) %>%
+    dplyr::select(Gene)
+  top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+  gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+}
+
+####  选择UROMOL构建模型 ####
+# 1 数据在expr_representative中
+# 2 基因在gene_for_model中
+#### 循环计算 chaptGPT ####
+#### 1 直接在expr_UROMOL中建立pearson centroid模型，没有Z-score标准化 ####
+# 请注意，在训练集中，并非包含gene_for_model的所有基因
+
+# 定义一个函数来执行建模和评估
+run_modeling <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  for (gene_set_index in seq_along(gene_for_model)) {
+    gene_list <- unlist(gene_for_model[[gene_set_index]][, 2])
+    # 在训练集上建模
+    data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+    mcl_cluster <- data[, ncol(data)]
+    data <- data[, -ncol(data)]
+    # 计算质心
+    centroids <- data %>%
+      as.data.frame() %>%
+      mutate(Class = mcl_cluster) %>%
+      group_by(Class) %>%
+      summarise(across(everything(), mean))
+    
+    centroids <- apply(centroids, 2, as.numeric)
+    centroids <- as.matrix(centroids)
+    rownames(centroids) <- centroids[, 1]
+    centroids <- centroids[, -1]
+    
+    # 定义pearson函数
+    pearson_correlation <- function(x, y) {
+      cor(x, y, method = "pearson")
+    }
+    
+    # 初始化每个基因集的总表现
+    total_balanced_accuracy <- 0
+    total_sensitivity <- 0
+    total_specificity <- 0
+    total_overall_accuracy <- 0
+    validation_count <- 0
+    
+    # 用于累积每个类别的准确率
+    class_accuracies_accumulated <- list()
+    
+    # 遍历每个验证集
+    for (validation_set_name in names(expr_representative)) {
+      if (validation_set_name == "expr_UROMOL") next  # 跳过训练集
+      
+      test_data <- expr_representative[[validation_set_name]]
+      test_data <- test_data[, colnames(test_data) %in% gene_list]
+      
+      # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+      if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+        test_data <- log2(test_data + 1)
+      }
+      
+      # 找到共同的基因
+      common_genes <- intersect(colnames(centroids), colnames(test_data))
+      
+      # 如果没有共同基因，跳过该验证集
+      if (length(common_genes) == 0) {
+        cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+        next
+      }
+      
+      # 只使用共同基因计算相关系数
+      predictions <- apply(test_data, 1, function(sample) {
+        sample <- sample[common_genes]
+        correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+        names(which.max(correlations))
+      })
+      
+      mcl_cluster_test <- expr_representative[[validation_set_name]]
+      mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+      
+      # 确保所有类别都在混淆矩阵中
+      all_classes <- union(predictions, mcl_cluster_test)
+      
+      confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                                factor(mcl_cluster_test, levels = all_classes))
+      
+      # 计算每个类别的准确率
+      class_accuracies <- diag(prop.table(confusion_matrix, 1))
+      
+      # 将 NaN 替换为 0
+      class_accuracies[is.nan(class_accuracies)] <- 0
+      
+      # 检查实际数据中是否存在每个类别
+      for (class_name in all_classes) {
+        if (!(class_name %in% mcl_cluster_test) && (class_name %in% predictions)) {
+          # 如果实际数据中不存在该类别，但有预测为该类别的样本，则准确率为 0
+          class_accuracies[class_name] <- 0
+        }
+      }
+      
+      # 累积每个类别的准确率
+      for (class_name in names(class_accuracies)) {
+        if (!is.null(class_accuracies_accumulated[[class_name]])) {
+          class_accuracies_accumulated[[class_name]] <- c(class_accuracies_accumulated[[class_name]], class_accuracies[class_name])
+        } else {
+          class_accuracies_accumulated[[class_name]] <- class_accuracies[class_name]
+        }
+      }
+      
+      # 计算加权平均的平衡准确率
+      balanced_accuracy <- mean(class_accuracies)
+      
+      # 计算总体准确率
+      total_correct_predictions <- sum(diag(confusion_matrix))
+      total_predictions <- sum(confusion_matrix)
+      overall_accuracy <- total_correct_predictions / total_predictions
+      
+      # 计算每个类别的敏感性和特异性
+      sensitivity <- numeric(nrow(confusion_matrix))
+      specificity <- numeric(nrow(confusion_matrix))
+      for (i in 1:nrow(confusion_matrix)) {
+        TP <- confusion_matrix[i, i]
+        FN <- sum(confusion_matrix[i, ]) - TP
+        FP <- sum(confusion_matrix[, i]) - TP
+        TN <- sum(confusion_matrix) - TP - FN - FP
+        sensitivity[i] <- TP / (TP + FN)
+        specificity[i] <- TN / (TN + FP)
+      }
+      
+      mean_sensitivity <- mean(sensitivity, na.rm = TRUE)
+      mean_specificity <- mean(specificity, na.rm = TRUE)
+      
+      # 累加每个验证集的结果
+      total_balanced_accuracy <- total_balanced_accuracy + balanced_accuracy
+      total_sensitivity <- total_sensitivity + mean_sensitivity
+      total_specificity <- total_specificity + mean_specificity
+      total_overall_accuracy <- total_overall_accuracy + overall_accuracy
+      validation_count <- validation_count + 1
+      
+      # 将每个验证集的结果存储在列表中
+      results[[paste(gene_set_index, validation_set_name, sep = "_")]] <- list(
+        balanced_accuracy = balanced_accuracy,
+        mean_sensitivity = mean_sensitivity,
+        mean_specificity = mean_specificity,
+        overall_accuracy = overall_accuracy
+      )
+    }
+    
+    # 计算每个基因集的平均表现
+    if (validation_count > 0) {
+      avg_balanced_accuracy <- total_balanced_accuracy / validation_count
+      avg_sensitivity <- total_sensitivity / validation_count
+      avg_specificity <- total_specificity / validation_count
+      avg_overall_accuracy <- total_overall_accuracy / validation_count
+      
+      # 计算每个类别的平均准确率
+      avg_class_accuracies <- sapply(class_accuracies_accumulated, mean, na.rm = TRUE)
+      
+      # 将每个基因集的总表现存储在列表中
+      results[[paste("GeneSet", gene_set_index, "Overall", sep = "_")]] <- list(
+        balanced_accuracy = avg_balanced_accuracy,
+        mean_sensitivity = avg_sensitivity,
+        mean_specificity = avg_specificity,
+        overall_accuracy = avg_overall_accuracy,
+        avg_class_accuracies = avg_class_accuracies  # 添加每个类别的平均准确率
+      )
+    }
+  }
+  
+  # 检查 results 列表是否为空
+  if (length(results) == 0) {
+    stop("结果列表为空，可能是因为没有共同基因或其他问题。")
+  }
+  
+  # 将结果转换为数据框以便于比较
+  results_df <- do.call(rbind, lapply(names(results), function(name) {
+    result <- results[[name]]
+    # 创建一个数据框行
+    row <- data.frame(GeneSet_ValidationSet = name, 
+                      balanced_accuracy = result$balanced_accuracy,
+                      mean_sensitivity = result$mean_sensitivity,
+                      mean_specificity = result$mean_specificity,
+                      overall_accuracy = result$overall_accuracy,
+                      stringsAsFactors = FALSE)
+    
+    # 为每个可能的类别创建单独的列
+    for (class_name in all_possible_classes) {
+      if (class_name %in% names(result$avg_class_accuracies)) {
+        row[[paste0("accuracy_", class_name)]] <- result$avg_class_accuracies[class_name]
+      } else {
+        row[[paste0("accuracy_", class_name)]] <- NA  # 如果该类别没有数据，填充NA
+      }
+    }
+    
+    return(row)
+  }))
+  
+  # 打印 output_path 以检查路径
+  cat("保存路径:", output_path, "\n")
+  
+  # 保存结果
+  saveRDS(results_df, output_path)
+  
+  # 返回结果数据框
+  return(results_df)
+}
+
+
+# 以下代码的解决方法是：提出centroid中与训练集有相同基因的部分再预测！
+library(dplyr)
+
+results <- list()
+run_modeling(
+  p_value_threshold = 0.05,
+  auc_threshold = 0.6,
+  expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+  top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+  output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS"
+)
+
+results_df <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS")
+
+overall_accuracy <- results_df[grepl("GeneSet",results_df$GeneSet_ValidationSet),]
+
+geneset_length <- sapply(gene_for_model, function(x) length(x$Gene))
+
+# 提取 overall_accuracy 中的最大值及其对应的索引
+max_index <- which.max(overall_accuracy$overall_accuracy)
+max_value <- overall_accuracy$overall_accuracy[max_index]
+
+# 绘制散点图
+plot(geneset_length, overall_accuracy$overall_accuracy, 
+     xlab = "Gene_num", 
+     ylab = "Overall_accuracy", 
+     pch = 16, col = "blue")
+
+# 将最大值点标红
+points(geneset_length[max_index], max_value, 
+       col = "red", 
+       pch = 16, 
+       cex = 1.5)
+
+# 添加文本标注（可选）
+text(geneset_length[max_index], max_value, 
+     labels = paste0("(", geneset_length[max_index], ", ", round(max_value, 2), ")"), 
+     pos = 3, col = "red")
+
+#### 从统计结果看出，geneSet_29 也即top 150（共832个基因）时accuracy最好 #### 
+# 读取数据
+# 选择基因
+top_genes_per_group <- top200_genes %>%
+    group_by(Comparison) %>%
+    do(bind_rows(
+      dplyr::slice(., 1:150),
+      dplyr::slice(., 201:350)
+    )) %>%
+  dplyr::select(Gene)
+top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+
+# 建模
+expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+
+gene_list <- unlist(top_genes_per_group[, 2])
+# 在训练集上建模
+data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+mcl_cluster <- data[, ncol(data)]
+data <- data[, -ncol(data)]
+# 计算质心
+centroids <- data %>%
+    as.data.frame() %>%
+    mutate(Class = mcl_cluster) %>%
+    group_by(Class) %>%
+    summarise(across(everything(), mean))
+  
+centroids <- apply(centroids, 2, as.numeric)
+centroids <- as.matrix(centroids)
+rownames(centroids) <- centroids[, 1]
+centroids <- centroids[, -1]
+  
+# 定义pearson函数
+pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+}
+
+saveRDS(centroids,"D:/OneDrive - 中山大学/R_workplace/MCL/dataset/model1/建模_centroid.RDS")
+
+#### 给所有样本归类 ####
+load("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_matrix.RData")
+max(expr_dejong_A)
+
+expr_matrices <- list(
+  expr_dejong_A = as.matrix(expr_dejong_A),
+  expr_dejong_B = as.matrix(expr_dejong_B),
+  expr_GSE120736 = as.matrix(expr_GSE120736),
+  expr_GSE128959 = as.matrix(expr_GSE128959),
+  expr_GSE13507 = as.matrix(expr_GSE13507),
+  expr_GSE154261_73 = as.matrix(expr_GSE154261_73),
+  expr_GSE154261_26 = as.matrix(expr_GSE154261_26),
+  expr_GSE163209 = as.matrix(expr_GSE163209),
+  expr_GSE31684 = as.matrix(expr_GSE31684),
+  expr_GSE32549 = as.matrix(expr_GSE32549),
+  expr_GSE48075 = as.matrix(expr_GSE48075),
+  expr_GSE83586 = as.matrix(expr_GSE83586),
+  expr_UROMOL = as.matrix(expr_UROMOL)
+)
+
+expr_matrices <- lapply(expr_matrices, t)
+expr <- expr_matrices[["expr_dejong_A"]]
+
+sample_ID <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/cluster_result_NMIBC_2")
+
+expr_NMIBC <- list()
+
+for (name in names(expr_matrices)){
+  data <- expr_matrices[[name]]
+  data <- as.data.frame(data)
+  data$sample <- rownames(data)
+  data <-  data[data$sample%in%sample_ID$Baylor_Lund.ID,]
+  data <- data[,-ncol(data)]
+  expr_NMIBC[[name]] <- data
+}
+
+expr <- expr_NMIBC[["expr_dejong_A"]]
+
+sample_cluster <- list()
+
+for (name in names(expr_NMIBC) ){
+  data <- expr_NMIBC[[name]]
+  
+  # 找到共同的基因
+  common_genes <- intersect(colnames(centroids), colnames(data))
+
+  predictions <- apply(data, 1, function(sample) {
+    sample <- sample[common_genes]
+    correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+    names(which.max(correlations))
+  })
+  
+  result <- as.data.frame(cbind(rownames(data),predictions))
+  colnames(result) <- c("sample","mcl_cluster")
+  sample_cluster[[name]] <- result
+}
+
+# 将列表中的所有数据框合并为一个数据框
+NMIBC_mcl_cluster <- do.call(rbind, sample_cluster)
+
+table(NMIBC_mcl_cluster$mcl_cluster)
+
+saveRDS(NMIBC_mcl_cluster,"D:/OneDrive - 中山大学/R_workplace/MCL/dataset/model1/NMIBC_mcl_cluster.RDS")
+
+####  生存资料分析  ####
+merge_clinic_all <- read.csv("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/merge_clinic_all_with_prognosis.csv")
+merge_clinic_all <- merge_clinic_all[,-1]
+
+mcl_cluster_clininc <- merge(merge_clinic_all,NMIBC_mcl_cluster,by.x="sample",by.y="sample")
+library(dplyr)
+mcl_cluster_clininc<- mcl_cluster_clininc%>%
+  mutate(recurrence = as.numeric(recurrence))
+mcl_cluster_clininc<- mcl_cluster_clininc%>%
+  mutate(time_rec = as.numeric(time_rec))
+mcl_cluster_clininc<- mcl_cluster_clininc%>%
+  mutate(progression = as.numeric(progression))
+mcl_cluster_clininc<- mcl_cluster_clininc%>%
+  mutate(time_pro = as.numeric(time_pro))
+
+library(survival)
+library(survminer)
+# 进展
+km_fit <- survfit(Surv(time_rec, recurrence) ~ mcl_cluster, data = mcl_cluster_clininc)
+# 复发
+km_fit <- survfit(Surv(time_pro, progression) ~ mcl_cluster, data = mcl_cluster_clininc)
+
+ggsurvplot(km_fit,
+           pval = TRUE, conf.int = TRUE,
+           risk.table = TRUE, # 添加风险表
+           risk.table.col = "strata", # 根据分层更改风险表颜色
+           linetype = "strata", # 根据分层更改线型
+           surv.median.line = "hv", # 同时显示垂直和水平参考线
+           ggtheme = theme_bw(), # 更改ggplot2的主题
+           palette = c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3"))#定义颜色
+
+
+#### 20241201 计算所有core sample的accuracy ####
+# 定义一个函数来执行建模和评估
+run_modeling <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  # 只基于 gene_for_model[[29]] 进行建模
+  gene_set_index <- 29
+  gene_list <- unlist(gene_for_model[[gene_set_index]][, 2])
+  
+  # 在训练集上建模
+  data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+  mcl_cluster <- data[, ncol(data)]
+  data <- data[, -ncol(data)]
+  
+  # 计算质心
+  centroids <- data %>%
+    as.data.frame() %>%
+    mutate(Class = mcl_cluster) %>%
+    group_by(Class) %>%
+    summarise(across(everything(), mean))
+  
+  centroids <- apply(centroids, 2, as.numeric)
+  centroids <- as.matrix(centroids)
+  rownames(centroids) <- centroids[, 1]
+  centroids <- centroids[, -1]
+  
+  # 定义pearson函数
+  pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+  }
+  
+  # 初始化每个基因集的总表现
+  total_balanced_accuracy <- 0
+  total_sensitivity <- 0
+  total_specificity <- 0
+  total_overall_accuracy <- 0
+  validation_count <- 0
+  
+  # 用于累积每个类别的准确率
+  class_accuracies_accumulated <- list()
+  
+  # 遍历每个验证集，包括 UROMOL
+  for (validation_set_name in names(expr_representative)) {
+    test_data <- expr_representative[[validation_set_name]]
+    test_data <- test_data[, colnames(test_data) %in% gene_list]
+    
+    # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+    if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+      test_data <- log2(test_data + 1)
+    }
+    
+    # 找到共同的基因
+    common_genes <- intersect(colnames(centroids), colnames(test_data))
+    
+    # 如果没有共同基因，跳过该验证集
+    if (length(common_genes) == 0) {
+      cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+      next
+    }
+    
+    # 只使用共同基因计算相关系数
+    predictions <- apply(test_data, 1, function(sample) {
+      sample <- sample[common_genes]
+      correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+      names(which.max(correlations))
+    })
+    
+    mcl_cluster_test <- expr_representative[[validation_set_name]]
+    mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+    
+    # 确保所有类别都在混淆矩阵中
+    all_classes <- union(predictions, mcl_cluster_test)
+    
+    confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                              factor(mcl_cluster_test, levels = all_classes))
+    
+    # 计算每个类别的准确率
+    class_accuracies <- diag(prop.table(confusion_matrix, 1))
+    
+    # 将 NaN 替换为 0
+    class_accuracies[is.nan(class_accuracies)] <- 0
+    
+    # 检查实际数据中是否存在每个类别
+    for (class_name in all_classes) {
+      if (!(class_name %in% mcl_cluster_test) && (class_name %in% predictions)) {
+        # 如果实际数据中不存在该类别，但有预测为该类别的样本，则准确率为 0
+        class_accuracies[class_name] <- 0
+      }
+    }
+    
+    # 累积每个类别的准确率
+    for (class_name in names(class_accuracies)) {
+      if (!is.null(class_accuracies_accumulated[[class_name]])) {
+        class_accuracies_accumulated[[class_name]] <- c(class_accuracies_accumulated[[class_name]], class_accuracies[class_name])
+      } else {
+        class_accuracies_accumulated[[class_name]] <- class_accuracies[class_name]
+      }
+    }
+    
+    # 计算加权平均的平衡准确率
+    balanced_accuracy <- mean(class_accuracies)
+    
+    # 计算总体准确率
+    total_correct_predictions <- sum(diag(confusion_matrix))
+    total_predictions <- sum(confusion_matrix)
+    overall_accuracy <- total_correct_predictions / total_predictions
+    
+    # 计算每个类别的敏感性和特异性
+    sensitivity <- numeric(nrow(confusion_matrix))
+    specificity <- numeric(nrow(confusion_matrix))
+    for (i in 1:nrow(confusion_matrix)) {
+      TP <- confusion_matrix[i, i]
+      FN <- sum(confusion_matrix[i, ]) - TP
+      FP <- sum(confusion_matrix[, i]) - TP
+      TN <- sum(confusion_matrix) - TP - FN - FP
+      sensitivity[i] <- TP / (TP + FN)
+      specificity[i] <- TN / (TN + FP)
+    }
+    
+    mean_sensitivity <- mean(sensitivity, na.rm = TRUE)
+    mean_specificity <- mean(specificity, na.rm = TRUE)
+    
+    # 累加每个验证集的结果
+    total_balanced_accuracy <- total_balanced_accuracy + balanced_accuracy
+    total_sensitivity <- total_sensitivity + mean_sensitivity
+    total_specificity <- total_specificity + mean_specificity
+    total_overall_accuracy <- total_overall_accuracy + overall_accuracy
+    validation_count <- validation_count + 1
+    
+    # 将每个验证集的结果存储在列表中
+    results[[paste(gene_set_index, validation_set_name, sep = "_")]] <- list(
+      balanced_accuracy = balanced_accuracy,
+      mean_sensitivity = mean_sensitivity,
+      mean_specificity = mean_specificity,
+      overall_accuracy = overall_accuracy
+    )
+  }
+  
+  # 计算每个基因集的平均表现
+  if (validation_count > 0) {
+    avg_balanced_accuracy <- total_balanced_accuracy / validation_count
+    avg_sensitivity <- total_sensitivity / validation_count
+    avg_specificity <- total_specificity / validation_count
+    avg_overall_accuracy <- total_overall_accuracy / validation_count
+    
+    # 计算每个类别的平均准确率
+    avg_class_accuracies <- sapply(class_accuracies_accumulated, mean, na.rm = TRUE)
+    
+    # 将每个基因集的总表现存储在列表中
+    results[[paste("GeneSet", gene_set_index, "Overall", sep = "_")]] <- list(
+      balanced_accuracy = avg_balanced_accuracy,
+      mean_sensitivity = avg_sensitivity,
+      mean_specificity = avg_specificity,
+      overall_accuracy = avg_overall_accuracy,
+      avg_class_accuracies = avg_class_accuracies  # 添加每个类别的平均准确率
+    )
+  }
+  
+  # 检查 results 列表是否为空
+  if (length(results) == 0) {
+    stop("结果列表为空，可能是因为没有共同基因或其他问题。")
+  }
+  
+  # 将结果转换为数据框以便于比较
+  results_df <- do.call(rbind, lapply(names(results), function(name) {
+    result <- results[[name]]
+    # 创建一个数据框行
+    row <- data.frame(GeneSet_ValidationSet = name, 
+                      balanced_accuracy = result$balanced_accuracy,
+                      mean_sensitivity = result$mean_sensitivity,
+                      mean_specificity = result$mean_specificity,
+                      overall_accuracy = result$overall_accuracy,
+                      stringsAsFactors = FALSE)
+    
+    # 为每个可能的类别创建单独的列
+    for (class_name in all_possible_classes) {
+      if (class_name %in% names(result$avg_class_accuracies)) {
+        row[[paste0("accuracy_", class_name)]] <- result$avg_class_accuracies[class_name]
+      } else {
+        row[[paste0("accuracy_", class_name)]] <- NA  # 如果该类别没有数据，填充NA
+      }
+    }
+    
+    return(row)
+  }))
+  
+  # 打印 output_path 以检查路径
+  cat("保存路径:", output_path, "\n")
+  
+  # 保存结果
+  saveRDS(results_df, output_path)
+  
+  # 返回结果数据框
+  return(results_df)
+}
+
+results <- list()
+run_modeling(
+  p_value_threshold = 0.05,
+  auc_threshold = 0.6,
+  expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+  top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+  output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS"
+)
+
+results_core_samples <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS")
+
+#### 20241201 计算训练集以外的样本的精确度、特异性和敏感性 ####
+run_modeling <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  for (gene_set_index in seq_along(gene_for_model)) {
+    gene_list <- unlist(gene_for_model[[gene_set_index]][, 2])
+    # 在训练集上建模
+    data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+    mcl_cluster <- data[, ncol(data)]
+    data <- data[, -ncol(data)]
+    # 计算质心
+    centroids <- data %>%
+      as.data.frame() %>%
+      mutate(Class = mcl_cluster) %>%
+      group_by(Class) %>%
+      summarise(across(everything(), mean))
+    
+    centroids <- apply(centroids, 2, as.numeric)
+    centroids <- as.matrix(centroids)
+    rownames(centroids) <- centroids[, 1]
+    centroids <- centroids[, -1]
+    
+    # 定义pearson函数
+    pearson_correlation <- function(x, y) {
+      cor(x, y, method = "pearson")
+    }
+    
+    # 初始化每个基因集的总表现
+    total_balanced_accuracy <- 0
+    total_sensitivity <- 0
+    total_specificity <- 0
+    total_overall_accuracy <- 0
+    validation_count <- 0
+    
+    # 用于累积每个类别的准确率、敏感性和特异性
+    class_accuracies_accumulated <- list()
+    class_sensitivities_accumulated <- list()
+    class_specificities_accumulated <- list()
+    
+    # 遍历每个验证集
+    for (validation_set_name in names(expr_representative)) {
+      if (validation_set_name == "expr_UROMOL") next  # 跳过训练集
+      
+      test_data <- expr_representative[[validation_set_name]]
+      test_data <- test_data[, colnames(test_data) %in% gene_list]
+      
+      # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+      if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+        test_data <- log2(test_data + 1)
+      }
+      
+      # 找到共同的基因
+      common_genes <- intersect(colnames(centroids), colnames(test_data))
+      
+      # 如果没有共同基因，跳过该验证集
+      if (length(common_genes) == 0) {
+        cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+        next
+      }
+      
+      # 只使用共同基因计算相关系数
+      predictions <- apply(test_data, 1, function(sample) {
+        sample <- sample[common_genes]
+        correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+        names(which.max(correlations))
+      })
+      
+      mcl_cluster_test <- expr_representative[[validation_set_name]]
+      mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+      
+      # 确保所有类别都在混淆矩阵中
+      all_classes <- union(predictions, mcl_cluster_test)
+      
+      confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                                factor(mcl_cluster_test, levels = all_classes))
+      
+      # 计算每个类别的准确率
+      class_accuracies <- diag(prop.table(confusion_matrix, 1))
+      
+      # 将 NaN 替换为 0
+      class_accuracies[is.nan(class_accuracies)] <- 0
+      
+      # 计算每个类别的敏感性和特异性
+      sensitivity <- numeric(nrow(confusion_matrix))
+      specificity <- numeric(nrow(confusion_matrix))
+      names(sensitivity) <- all_classes
+      names(specificity) <- all_classes
+      
+      for (i in 1:nrow(confusion_matrix)) {
+        TP <- confusion_matrix[i, i]
+        FN <- sum(confusion_matrix[i, ]) - TP
+        FP <- sum(confusion_matrix[, i]) - TP
+        TN <- sum(confusion_matrix) - TP - FN - FP
+        sensitivity[i] <- TP / (TP + FN)
+        specificity[i] <- TN / (TN + FP)
+      }
+      
+      # 将 NaN 替换为 0
+      sensitivity[is.nan(sensitivity)] <- 0
+      specificity[is.nan(specificity)] <- 0
+      
+      # 检查实际数据中是否存在每个类别
+      for (class_name in all_classes) {
+        if (!(class_name %in% mcl_cluster_test) && (class_name %in% predictions)) {
+          # 如果实际数据中不存在该类别，但有预测为该类别的样本，则准确率、敏感性和特异性为 0
+          class_accuracies[class_name] <- 0
+          sensitivity[class_name] <- 0
+          specificity[class_name] <- 0
+        }
+      }
+      
+      # 累积每个类别的准确率、敏感性和特异性
+      for (class_name in names(class_accuracies)) {
+        if (!is.null(class_accuracies_accumulated[[class_name]])) {
+          class_accuracies_accumulated[[class_name]] <- c(class_accuracies_accumulated[[class_name]], class_accuracies[class_name])
+          class_sensitivities_accumulated[[class_name]] <- c(class_sensitivities_accumulated[[class_name]], sensitivity[class_name])
+          class_specificities_accumulated[[class_name]] <- c(class_specificities_accumulated[[class_name]], specificity[class_name])
+        } else {
+          class_accuracies_accumulated[[class_name]] <- class_accuracies[class_name]
+          class_sensitivities_accumulated[[class_name]] <- sensitivity[class_name]
+          class_specificities_accumulated[[class_name]] <- specificity[class_name]
+        }
+      }
+      
+      # 计算加权平均的平衡准确率
+      balanced_accuracy <- mean(class_accuracies)
+      
+      # 计算总体准确率
+      total_correct_predictions <- sum(diag(confusion_matrix))
+      total_predictions <- sum(confusion_matrix)
+      overall_accuracy <- total_correct_predictions / total_predictions
+      
+      mean_sensitivity <- mean(sensitivity, na.rm = TRUE)
+      mean_specificity <- mean(specificity, na.rm = TRUE)
+      
+      # 累加每个验证集的结果
+      total_balanced_accuracy <- total_balanced_accuracy + balanced_accuracy
+      total_sensitivity <- total_sensitivity + mean_sensitivity
+      total_specificity <- total_specificity + mean_specificity
+      total_overall_accuracy <- total_overall_accuracy + overall_accuracy
+      validation_count <- validation_count + 1
+      
+      # 将每个验证集的结果存储在列表中
+      results[[paste(gene_set_index, validation_set_name, sep = "_")]] <- list(
+        balanced_accuracy = balanced_accuracy,
+        mean_sensitivity = mean_sensitivity,
+        mean_specificity = mean_specificity,
+        overall_accuracy = overall_accuracy
+      )
+    }
+    
+    # 计算每个基因集的平均表现
+    if (validation_count > 0) {
+      avg_balanced_accuracy <- total_balanced_accuracy / validation_count
+      avg_sensitivity <- total_sensitivity / validation_count
+      avg_specificity <- total_specificity / validation_count
+      avg_overall_accuracy <- total_overall_accuracy / validation_count
+      
+      # 计算每个类别的平均准确率、敏感性和特异性
+      avg_class_accuracies <- sapply(class_accuracies_accumulated, mean, na.rm = TRUE)
+      avg_class_sensitivities <- sapply(class_sensitivities_accumulated, mean, na.rm = TRUE)
+      avg_class_specificities <- sapply(class_specificities_accumulated, mean, na.rm = TRUE)
+      
+      # 将每个基因集的总表现存储在列表中
+      results[[paste("GeneSet", gene_set_index, "Overall", sep = "_")]] <- list(
+        balanced_accuracy = avg_balanced_accuracy,
+        mean_sensitivity = avg_sensitivity,
+        mean_specificity = avg_specificity,
+        overall_accuracy = avg_overall_accuracy,
+        avg_class_accuracies = avg_class_accuracies,  # 添加每个类别的平均准确率
+        avg_class_sensitivities = avg_class_sensitivities,  # 添加每个类别的平均敏感性
+        avg_class_specificities = avg_class_specificities  # 添加每个类别的平均特异性
+      )
+    }
+  }
+  
+  # 检查 results 列表是否为空
+  if (length(results) == 0) {
+    stop("结果列表为空，可能是因为没有共同基因或其他问题。")
+  }
+  
+  # 将结果转换为数据框以便于比较
+  results_df <- do.call(rbind, lapply(names(results), function(name) {
+    result <- results[[name]]
+    # 创建一个数据框行
+    row <- data.frame(GeneSet_ValidationSet = name, 
+                      balanced_accuracy = result$balanced_accuracy,
+                      mean_sensitivity = result$mean_sensitivity,
+                      mean_specificity = result$mean_specificity,
+                      overall_accuracy = result$overall_accuracy,
+                      stringsAsFactors = FALSE)
+    
+    # 为每个可能的类别创建单独的列
+    for (class_name in all_possible_classes) {
+      if (class_name %in% names(result$avg_class_accuracies)) {
+        row[[paste0("accuracy_", class_name)]] <- result$avg_class_accuracies[class_name]
+        row[[paste0("sensitivity_", class_name)]] <- result$avg_class_sensitivities[class_name]
+        row[[paste0("specificity_", class_name)]] <- result$avg_class_specificities[class_name]
+      } else {
+        row[[paste0("accuracy_", class_name)]] <- NA  # 如果该类别没有数据，填充NA
+        row[[paste0("sensitivity_", class_name)]] <- NA
+        row[[paste0("specificity_", class_name)]] <- NA
+      }
+    }
+    
+    return(row)
+  }))
+  
+  # 打印 output_path 以检查路径
+  cat("保存路径:", output_path, "\n")
+  
+  # 保存结果
+  saveRDS(results_df, output_path)
+  
+  # 返回结果数据框
+  return(results_df)
+}
+
+results <- list()
+run_modeling(
+  p_value_threshold = 0.05,
+  auc_threshold = 0.6,
+  expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+  top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+  output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6_特异性和敏感性.RDS"
+)
+
+results_sen_spe <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6_特异性和敏感性.RDS")
+
+gene_set_29_results <- results_sen_spe[377,] 
+
+#### 作图 ####
+library(ggplot2)
+
+library(tidyr)
+long_data <- gene_set_29_results %>%
+  pivot_longer(
+    cols = starts_with("accuracy_") | starts_with("sensitivity_") | starts_with("specificity_"),
+    names_to = c("metric", "category"),
+    names_sep = "_",
+    values_to = "value"
+  )
+
+# 将类别转换为数值型
+long_data$category <- as.numeric(long_data$category)
+
+# 定义颜色
+colors <- c("1" = "#80C5A2", "2" = "#C77CA2", "3" = "#4681B3")
+
+# 绘图函数
+plot_metric <- function(data, metric_name, colors) {
+  ggplot(data[data$metric == metric_name, ], 
+         aes(x = factor(category), y = value, color = factor(category))) +
+    geom_point(size = 4) +
+    scale_color_manual(values = colors) +
+    labs(x = "类别", y = metric_name, title = paste0(metric_name, " 散点图")) +
+    ylim(0, 1) +  # 设置 y 轴范围为 0 到 1
+    theme_minimal()
+}
+
+# 绘制 Accuracy 散点图
+accuracy_plot <- plot_metric(long_data, "accuracy", colors)
+
+# 绘制 Sensitivity 散点图
+sensitivity_plot <- plot_metric(long_data, "sensitivity", colors)
+
+# 绘制 Specificity 散点图
+specificity_plot <- plot_metric(long_data, "specificity", colors)
+
+# 显示图形
+print(accuracy_plot)
+print(sensitivity_plot)
+print(specificity_plot)
+
+
+#### 20241201 计算core_samples的精确度、特异性和敏感性 ####
+run_modeling <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  for (gene_set_index in seq_along(gene_for_model)) {
+    gene_list <- unlist(gene_for_model[[gene_set_index]][, 2])
+    # 在训练集上建模
+    data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+    mcl_cluster <- data[, ncol(data)]
+    data <- data[, -ncol(data)]
+    # 计算质心
+    centroids <- data %>%
+      as.data.frame() %>%
+      mutate(Class = mcl_cluster) %>%
+      group_by(Class) %>%
+      summarise(across(everything(), mean))
+    
+    centroids <- apply(centroids, 2, as.numeric)
+    centroids <- as.matrix(centroids)
+    rownames(centroids) <- centroids[, 1]
+    centroids <- centroids[, -1]
+    
+    # 定义pearson函数
+    pearson_correlation <- function(x, y) {
+      cor(x, y, method = "pearson")
+    }
+    
+    # 初始化每个基因集的总表现
+    total_balanced_accuracy <- 0
+    total_sensitivity <- 0
+    total_specificity <- 0
+    total_overall_accuracy <- 0
+    validation_count <- 0
+    
+    # 用于累积每个类别的准确率、敏感性和特异性
+    class_accuracies_accumulated <- list()
+    class_sensitivities_accumulated <- list()
+    class_specificities_accumulated <- list()
+    
+    # 遍历每个验证集
+    for (validation_set_name in names(expr_representative)) {
+      test_data <- expr_representative[[validation_set_name]]
+      test_data <- test_data[, colnames(test_data) %in% gene_list]
+      
+      # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+      if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+        test_data <- log2(test_data + 1)
+      }
+      
+      # 找到共同的基因
+      common_genes <- intersect(colnames(centroids), colnames(test_data))
+      
+      # 如果没有共同基因，跳过该验证集
+      if (length(common_genes) == 0) {
+        cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+        next
+      }
+      
+      # 只使用共同基因计算相关系数
+      predictions <- apply(test_data, 1, function(sample) {
+        sample <- sample[common_genes]
+        correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+        names(which.max(correlations))
+      })
+      
+      mcl_cluster_test <- expr_representative[[validation_set_name]]
+      mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+      
+      # 确保所有类别都在混淆矩阵中
+      all_classes <- union(predictions, mcl_cluster_test)
+      
+      confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                                factor(mcl_cluster_test, levels = all_classes))
+      
+      # 计算每个类别的准确率
+      class_accuracies <- diag(prop.table(confusion_matrix, 1))
+      
+      # 将 NaN 替换为 0
+      class_accuracies[is.nan(class_accuracies)] <- 0
+      
+      # 计算每个类别的敏感性和特异性
+      sensitivity <- numeric(nrow(confusion_matrix))
+      specificity <- numeric(nrow(confusion_matrix))
+      names(sensitivity) <- all_classes
+      names(specificity) <- all_classes
+      
+      for (i in 1:nrow(confusion_matrix)) {
+        TP <- confusion_matrix[i, i]
+        FN <- sum(confusion_matrix[i, ]) - TP
+        FP <- sum(confusion_matrix[, i]) - TP
+        TN <- sum(confusion_matrix) - TP - FN - FP
+        sensitivity[i] <- TP / (TP + FN)
+        specificity[i] <- TN / (TN + FP)
+      }
+      
+      # 将 NaN 替换为 0
+      sensitivity[is.nan(sensitivity)] <- 0
+      specificity[is.nan(specificity)] <- 0
+      
+      # 检查实际数据中是否存在每个类别
+      for (class_name in all_classes) {
+        if (!(class_name %in% mcl_cluster_test) && (class_name %in% predictions)) {
+          # 如果实际数据中不存在该类别，但有预测为该类别的样本，则准确率、敏感性和特异性为 0
+          class_accuracies[class_name] <- 0
+          sensitivity[class_name] <- 0
+          specificity[class_name] <- 0
+        }
+      }
+      
+      # 累积每个类别的准确率、敏感性和特异性
+      for (class_name in names(class_accuracies)) {
+        if (!is.null(class_accuracies_accumulated[[class_name]])) {
+          class_accuracies_accumulated[[class_name]] <- c(class_accuracies_accumulated[[class_name]], class_accuracies[class_name])
+          class_sensitivities_accumulated[[class_name]] <- c(class_sensitivities_accumulated[[class_name]], sensitivity[class_name])
+          class_specificities_accumulated[[class_name]] <- c(class_specificities_accumulated[[class_name]], specificity[class_name])
+        } else {
+          class_accuracies_accumulated[[class_name]] <- class_accuracies[class_name]
+          class_sensitivities_accumulated[[class_name]] <- sensitivity[class_name]
+          class_specificities_accumulated[[class_name]] <- specificity[class_name]
+        }
+      }
+      
+      # 计算加权平均的平衡准确率
+      balanced_accuracy <- mean(class_accuracies)
+      
+      # 计算总体准确率
+      total_correct_predictions <- sum(diag(confusion_matrix))
+      total_predictions <- sum(confusion_matrix)
+      overall_accuracy <- total_correct_predictions / total_predictions
+      
+      mean_sensitivity <- mean(sensitivity, na.rm = TRUE)
+      mean_specificity <- mean(specificity, na.rm = TRUE)
+      
+      # 累加每个验证集的结果
+      total_balanced_accuracy <- total_balanced_accuracy + balanced_accuracy
+      total_sensitivity <- total_sensitivity + mean_sensitivity
+      total_specificity <- total_specificity + mean_specificity
+      total_overall_accuracy <- total_overall_accuracy + overall_accuracy
+      validation_count <- validation_count + 1
+      
+      # 将每个验证集的结果存储在列表中
+      results[[paste(gene_set_index, validation_set_name, sep = "_")]] <- list(
+        balanced_accuracy = balanced_accuracy,
+        mean_sensitivity = mean_sensitivity,
+        mean_specificity = mean_specificity,
+        overall_accuracy = overall_accuracy
+      )
+    }
+    
+    # 计算每个基因集的平均表现
+    if (validation_count > 0) {
+      avg_balanced_accuracy <- total_balanced_accuracy / validation_count
+      avg_sensitivity <- total_sensitivity / validation_count
+      avg_specificity <- total_specificity / validation_count
+      avg_overall_accuracy <- total_overall_accuracy / validation_count
+      
+      # 计算每个类别的平均准确率、敏感性和特异性
+      avg_class_accuracies <- sapply(class_accuracies_accumulated, mean, na.rm = TRUE)
+      avg_class_sensitivities <- sapply(class_sensitivities_accumulated, mean, na.rm = TRUE)
+      avg_class_specificities <- sapply(class_specificities_accumulated, mean, na.rm = TRUE)
+      
+      # 将每个基因集的总表现存储在列表中
+      results[[paste("GeneSet", gene_set_index, "Overall", sep = "_")]] <- list(
+        balanced_accuracy = avg_balanced_accuracy,
+        mean_sensitivity = avg_sensitivity,
+        mean_specificity = avg_specificity,
+        overall_accuracy = avg_overall_accuracy,
+        avg_class_accuracies = avg_class_accuracies,  # 添加每个类别的平均准确率
+        avg_class_sensitivities = avg_class_sensitivities,  # 添加每个类别的平均敏感性
+        avg_class_specificities = avg_class_specificities  # 添加每个类别的平均特异性
+      )
+    }
+  }
+  
+  # 检查 results 列表是否为空
+  if (length(results) == 0) {
+    stop("结果列表为空，可能是因为没有共同基因或其他问题。")
+  }
+  
+  # 将结果转换为数据框以便于比较
+  results_df <- do.call(rbind, lapply(names(results), function(name) {
+    result <- results[[name]]
+    # 创建一个数据框行
+    row <- data.frame(GeneSet_ValidationSet = name, 
+                      balanced_accuracy = result$balanced_accuracy,
+                      mean_sensitivity = result$mean_sensitivity,
+                      mean_specificity = result$mean_specificity,
+                      overall_accuracy = result$overall_accuracy,
+                      stringsAsFactors = FALSE)
+    
+    # 为每个可能的类别创建单独的列
+    for (class_name in all_possible_classes) {
+      if (class_name %in% names(result$avg_class_accuracies)) {
+        row[[paste0("accuracy_", class_name)]] <- result$avg_class_accuracies[class_name]
+        row[[paste0("sensitivity_", class_name)]] <- result$avg_class_sensitivities[class_name]
+        row[[paste0("specificity_", class_name)]] <- result$avg_class_specificities[class_name]
+      } else {
+        row[[paste0("accuracy_", class_name)]] <- NA  # 如果该类别没有数据，填充NA
+        row[[paste0("sensitivity_", class_name)]] <- NA
+        row[[paste0("specificity_", class_name)]] <- NA
+      }
+    }
+    
+    return(row)
+  }))
+  
+  # 打印 output_path 以检查路径
+  cat("保存路径:", output_path, "\n")
+  
+  # 保存结果
+  saveRDS(results_df, output_path)
+  
+  # 返回结果数据框
+  return(results_df)
+}
+
+results <- list()
+run_modeling(
+  p_value_threshold = 0.05,
+  auc_threshold = 0.6,
+  expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+  top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+  output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS"
+)
+
+results_sen_spe <- readRDS( "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS")
+
+gene_set_29_results_core_sample <- results_sen_spe[406,] 
+
+#### 作图 ####
+library(ggplot2)
+
+library(tidyr)
+long_data_core_sample <- gene_set_29_results_core_sample %>%
+  pivot_longer(
+    cols = starts_with("accuracy_") | starts_with("sensitivity_") | starts_with("specificity_"),
+    names_to = c("metric", "category"),
+    names_sep = "_",
+    values_to = "value"
+  )
+
+# 将类别转换为数值型
+long_data_core_sample$category <- as.numeric(long_data_core_sample$category)
+
+# 定义颜色
+colors <- c("1" = "#80C5A2", "2" = "#C77CA2", "3" = "#4681B3")
+
+# 绘图函数
+plot_metric <- function(data, metric_name, colors) {
+  ggplot(data[data$metric == metric_name, ], 
+         aes(x = factor(category), y = value, color = factor(category))) +
+    geom_point(size = 4) +
+    scale_color_manual(values = colors) +
+    labs(x = "类别", y = metric_name, title = paste0(metric_name, " 散点图")) +
+    ylim(0, 1) +  # 设置 y 轴范围为 0 到 1
+    theme_minimal()
+}
+
+# 绘制 Accuracy 散点图
+accuracy_plot <- plot_metric(long_data_core_sample, "accuracy", colors)
+
+# 绘制 Sensitivity 散点图
+sensitivity_plot <- plot_metric(long_data_core_sample, "sensitivity", colors)
+
+# 绘制 Specificity 散点图
+specificity_plot <- plot_metric(long_data_core_sample, "specificity", colors)
+
+# 显示图形
+print(accuracy_plot)
+print(sensitivity_plot)
+print(specificity_plot)
+
+#### 训练集以外的accuracy和 no information rate的比较 ####
+run_modeling_and_analyze <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path, gene_set_index_to_analyze = 29) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  # 初始化存储每个验证集的 Overall Accuracy 和真实标签
+  overall_accuracies <- c()
+  all_true_labels <- c()  # 用于存储所有验证集的真实标签
+  
+  gene_list <- unlist(gene_for_model[[gene_set_index_to_analyze]][, 2])
+  # 在训练集上建模
+  data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+  mcl_cluster <- data[, ncol(data)]
+  data <- data[, -ncol(data)]
+  # 计算质心
+  centroids <- data %>%
+    as.data.frame() %>%
+    mutate(Class = mcl_cluster) %>%
+    group_by(Class) %>%
+    summarise(across(everything(), mean))
+  
+  centroids <- apply(centroids, 2, as.numeric)
+  centroids <- as.matrix(centroids)
+  rownames(centroids) <- centroids[, 1]
+  centroids <- centroids[, -1]
+  
+  # 定义pearson函数
+  pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+  }
+  
+  # 遍历每个验证集（排除 UROMOL 数据集）
+  for (validation_set_name in setdiff(names(expr_representative), "expr_UROMOL")) {
+    test_data <- expr_representative[[validation_set_name]]
+    test_data <- test_data[, colnames(test_data) %in% gene_list]
+    
+    # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+    if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+      test_data <- log2(test_data + 1)
+    }
+    
+    # 找到共同的基因
+    common_genes <- intersect(colnames(centroids), colnames(test_data))
+    
+    # 如果没有共同基因，跳过该验证集
+    if (length(common_genes) == 0) {
+      cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+      next
+    }
+    
+    # 只使用共同基因计算相关系数
+    predictions <- apply(test_data, 1, function(sample) {
+      sample <- sample[common_genes]
+      correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+      names(which.max(correlations))
+    })
+    
+    mcl_cluster_test <- expr_representative[[validation_set_name]]
+    mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+    
+    # 将当前验证集的真实标签存储到 all_true_labels
+    all_true_labels <- c(all_true_labels, mcl_cluster_test)
+    
+    # 确保所有类别都在混淆矩阵中
+    all_classes <- union(predictions, mcl_cluster_test)
+    
+    confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                              factor(mcl_cluster_test, levels = all_classes))
+    
+    # 计算当前验证集的 Overall Accuracy
+    total_correct_predictions <- sum(diag(confusion_matrix))
+    total_predictions <- sum(confusion_matrix)
+    overall_accuracy <- total_correct_predictions / total_predictions
+    
+    # 将当前验证集的 Overall Accuracy 存储
+    overall_accuracies <- c(overall_accuracies, overall_accuracy)
+  }
+  
+  # 计算所有验证集的平均 Overall Accuracy
+  final_overall_accuracy <- mean(overall_accuracies, na.rm = TRUE)
+  
+  # 计算整体的 NIR
+  class_counts <- table(all_true_labels)  # 使用所有验证集的真实标签
+  majority_class_count <- max(class_counts)
+  total_samples <- sum(class_counts)
+  nir <- majority_class_count / total_samples
+  
+  # 计算 Overall Accuracy 的置信区间
+  total_samples <- length(all_true_labels)  # 使用所有验证集的总样本数
+  se <- sqrt((final_overall_accuracy * (1 - final_overall_accuracy)) / total_samples)
+  ci_lower <- final_overall_accuracy - 1.96 * se
+  ci_upper <- final_overall_accuracy + 1.96 * se
+  
+  # 进行单样本比例检验
+  correct_predictions <- round(final_overall_accuracy * total_samples)  # 四舍五入为整数
+  binom_test <- binom.test(x = correct_predictions, n = total_samples, p = nir, alternative = "greater")
+  p_value <- binom_test$p.value
+  
+  # 打印整体结果
+  cat("整体结果（排除 UROMOL 数据集）:\n")
+  cat("NIR:", nir, "\n")
+  cat("Overall Accuracy (平均):", final_overall_accuracy, "\n")
+  cat("95% CI:", ci_lower, "-", ci_upper, "\n")
+  # 将 P-value 转换为科学计数法格式
+  p_value_scientific <- format(p_value, scientific = TRUE)
+  cat("P-value (科学计数法):", p_value_scientific, "\n")
+  
+  # 保存结果
+  overall_results <- list(
+    NIR = nir,
+    Overall_Accuracy = final_overall_accuracy,
+    CI_Lower = ci_lower,
+    CI_Upper = ci_upper,
+    P_Value = p_value_scientific
+  )
+  saveRDS(overall_results, output_path)
+  
+  # 返回结果
+  return(overall_results)
+}
+results <- run_modeling_and_analyze(p_value_threshold = 0.05,
+                                    auc_threshold = 0.6,
+                                    expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+                                    top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+                                    output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6_noinformationrate.RDS",
+                                    gene_set_index_to_analyze = 29)
+
+#### core sample的accuracy与no information rate的比较 ####
+run_modeling_and_analyze <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path, gene_set_index_to_analyze = 29) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  # 初始化存储每个验证集的 Overall Accuracy 和真实标签
+  overall_accuracies <- c()
+  all_true_labels <- c()
+  
+  gene_list <- unlist(gene_for_model[[gene_set_index_to_analyze]][, 2])
+  # 在训练集上建模
+  data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+  mcl_cluster <- data[, ncol(data)]
+  data <- data[, -ncol(data)]
+  # 计算质心
+  centroids <- data %>%
+    as.data.frame() %>%
+    mutate(Class = mcl_cluster) %>%
+    group_by(Class) %>%
+    summarise(across(everything(), mean))
+  
+  centroids <- apply(centroids, 2, as.numeric)
+  centroids <- as.matrix(centroids)
+  rownames(centroids) <- centroids[, 1]
+  centroids <- centroids[, -1]
+  
+  # 定义pearson函数
+  pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+  }
+  
+  # 遍历每个验证集
+  for (validation_set_name in names(expr_representative)) {
+    test_data <- expr_representative[[validation_set_name]]
+    test_data <- test_data[, colnames(test_data) %in% gene_list]
+    
+    # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+    if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+      test_data <- log2(test_data + 1)
+    }
+    
+    # 找到共同的基因
+    common_genes <- intersect(colnames(centroids), colnames(test_data))
+    
+    # 如果没有共同基因，跳过该验证集
+    if (length(common_genes) == 0) {
+      cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+      next
+    }
+    
+    # 只使用共同基因计算相关系数
+    predictions <- apply(test_data, 1, function(sample) {
+      sample <- sample[common_genes]
+      correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+      names(which.max(correlations))
+    })
+    
+    mcl_cluster_test <- expr_representative[[validation_set_name]]
+    mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+    
+    # 确保所有类别都在混淆矩阵中
+    all_classes <- union(predictions, mcl_cluster_test)
+    
+    confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                              factor(mcl_cluster_test, levels = all_classes))
+    
+    # 计算当前验证集的 Overall Accuracy
+    total_correct_predictions <- sum(diag(confusion_matrix))
+    total_predictions <- sum(confusion_matrix)
+    overall_accuracy <- total_correct_predictions / total_predictions
+    
+    # 将当前验证集的 Overall Accuracy 存储
+    overall_accuracies <- c(overall_accuracies, overall_accuracy)
+    
+    # 将当前验证集的真实标签存储到 all_true_labels
+    all_true_labels <- c(all_true_labels, mcl_cluster_test)
+  }
+  
+  # 计算所有验证集的平均 Overall Accuracy
+  final_overall_accuracy <- mean(overall_accuracies, na.rm = TRUE)
+  
+  # 计算整体的 NIR
+  class_counts <- table(all_true_labels)  # 使用所有验证集的真实标签
+  majority_class_count <- max(class_counts)
+  total_samples <- sum(class_counts)
+  nir <- majority_class_count / total_samples
+  
+  # 计算 Overall Accuracy 的置信区间
+  total_samples <- length(all_true_labels)  # 使用所有验证集的总样本数
+  se <- sqrt((final_overall_accuracy * (1 - final_overall_accuracy)) / total_samples)
+  ci_lower <- final_overall_accuracy - 1.96 * se
+  ci_upper <- final_overall_accuracy + 1.96 * se
+  
+  # 检查 correct_predictions 和 total_samples 是否有效
+  correct_predictions <- round(final_overall_accuracy * total_samples)  # 四舍五入为整数
+  if (correct_predictions < 0 || total_samples <= 0) {
+    stop("correct_predictions 或 total_samples 的值无效，请检查输入数据。")
+  }
+  
+  # 进行单样本比例检验
+  binom_test <- binom.test(x = correct_predictions, n = total_samples, p = nir, alternative = "greater")
+  p_value <- binom_test$p.value
+  
+  # 打印整体结果
+  cat("整体结果:\n")
+  cat("NIR:", nir, "\n")
+  cat("Overall Accuracy (平均):", final_overall_accuracy, "\n")
+  cat("95% CI:", ci_lower, "-", ci_upper, "\n")
+  # 将 P-value 转换为科学计数法格式
+  p_value_scientific <- format(p_value, scientific = TRUE)
+  cat("P-value (科学计数法):", p_value_scientific, "\n")
+  
+  # 保存结果
+  overall_results <- list(
+    NIR = nir,
+    Overall_Accuracy = final_overall_accuracy,
+    CI_Lower = ci_lower,
+    CI_Upper = ci_upper,
+    P_Value = p_value_scientific
+  )
+  saveRDS(overall_results, output_path)
+  
+  # 返回结果
+  return(overall_results)
+}
+# 运行函数
+results <- run_modeling_and_analyze(p_value_threshold = 0.05,
+                                    auc_threshold = 0.6,
+                                    expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+                                    top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+                                    output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6_noinformationrate.RDS",
+                                    gene_set_index_to_analyze = 29)
+
+#### 20241202 计算core samples中每个数据集的accuracy，specificity 和 sensitivity ####
+run_modeling <- function(p_value_threshold, auc_threshold, expr_representative_path, top200_genes_path, output_path) {
+  # 读取数据
+  expr_representative <- readRDS(expr_representative_path)
+  top200_genes <- readRDS(top200_genes_path)
+  
+  # 选择基因
+  gene_for_model <- list()
+  for (i in c(0:38)) {
+    top_genes_per_group <- top200_genes %>%
+      group_by(Comparison) %>%
+      do(bind_rows(
+        slice(., 1:(10+5*i)),
+        slice(., 201:(210+5*i))
+      )) %>%
+      select(Gene)
+    top_genes_per_group <- top_genes_per_group[!duplicated(top_genes_per_group$Gene),]
+    gene_for_model[[paste0("top",10+i*5)]] <- top_genes_per_group
+  }
+  
+  # 建模
+  expr_UROMOL_mcl <- expr_representative[["expr_UROMOL"]]
+  results <- list()
+  per_class_results_all <- list()  # 用于存储所有验证集的 per_class_results
+  
+  # 获取所有可能的类别
+  all_possible_classes <- unique(expr_UROMOL_mcl$mcl_cluster)
+  
+  # 只基于 gene_for_model[[29]] 进行建模
+  gene_set_index <- 29
+  gene_list <- unlist(gene_for_model[[gene_set_index]][, 2])
+  
+  # 在训练集上建模
+  data <- expr_UROMOL_mcl[, colnames(expr_UROMOL_mcl) %in% c("mcl_cluster", gene_list)]
+  mcl_cluster <- data[, ncol(data)]
+  data <- data[, -ncol(data)]
+  
+  # 计算质心
+  centroids <- data %>%
+    as.data.frame() %>%
+    mutate(Class = mcl_cluster) %>%
+    group_by(Class) %>%
+    summarise(across(everything(), mean))
+  
+  centroids <- apply(centroids, 2, as.numeric)
+  centroids <- as.matrix(centroids)
+  rownames(centroids) <- centroids[, 1]
+  centroids <- centroids[, -1]
+  
+  # 定义pearson函数
+  pearson_correlation <- function(x, y) {
+    cor(x, y, method = "pearson")
+  }
+  
+  # 遍历每个验证集，包括 UROMOL
+  for (validation_set_name in names(expr_representative)) {
+    test_data <- expr_representative[[validation_set_name]]
+    test_data <- test_data[, colnames(test_data) %in% gene_list]
+    
+    # 如果是 expr_dejong_A 或 expr_dejong_B，进行 log2 转换
+    if (validation_set_name %in% c("expr_dejong_A", "expr_dejong_B","expr_GSE154261_73","expr_GSE154261_26")) {
+      test_data <- log2(test_data + 1)
+    }
+    
+    # 找到共同的基因
+    common_genes <- intersect(colnames(centroids), colnames(test_data))
+    
+    # 如果没有共同基因，跳过该验证集
+    if (length(common_genes) == 0) {
+      cat("验证集", validation_set_name, "没有共同基因，跳过。\n")
+      next
+    }
+    
+    # 只使用共同基因计算相关系数
+    predictions <- apply(test_data, 1, function(sample) {
+      sample <- sample[common_genes]
+      correlations <- apply(centroids[, common_genes, drop = FALSE], 1, pearson_correlation, y = sample)
+      names(which.max(correlations))
+    })
+    
+    mcl_cluster_test <- expr_representative[[validation_set_name]]
+    mcl_cluster_test <- mcl_cluster_test[, ncol(mcl_cluster_test)]
+    
+    # 确保所有类别都在混淆矩阵中
+    all_classes <- union(predictions, mcl_cluster_test)
+    
+    confusion_matrix <- table(factor(predictions, levels = all_classes), 
+                              factor(mcl_cluster_test, levels = all_classes))
+    
+    # 计算每个类别的准确率
+    class_accuracies <- diag(prop.table(confusion_matrix, 1))
+    class_accuracies[is.nan(class_accuracies)] <- 0  # 将 NaN 替换为 0
+    
+    # 计算每个类别的敏感性和特异性
+    sensitivity <- numeric(nrow(confusion_matrix))
+    specificity <- numeric(nrow(confusion_matrix))
+    for (i in 1:nrow(confusion_matrix)) {
+      TP <- confusion_matrix[i, i]
+      FN <- sum(confusion_matrix[i, ]) - TP
+      FP <- sum(confusion_matrix[, i]) - TP
+      TN <- sum(confusion_matrix) - TP - FN - FP
+      sensitivity[i] <- TP / (TP + FN)
+      specificity[i] <- TN / (TN + FP)
+    }
+    
+    # 将每个类别的结果存储到结果列表中
+    per_class_results <- data.frame(
+      ValidationSet = validation_set_name,
+      Class = all_classes,
+      Accuracy = class_accuracies[all_classes],
+      Sensitivity = sensitivity,
+      Specificity = specificity,
+      stringsAsFactors = FALSE
+    )
+    
+    # 累积所有验证集的 per_class_results
+    per_class_results_all[[validation_set_name]] <- per_class_results
+    
+    # 将每个验证集的结果存储在列表中
+    results[[paste(gene_set_index, validation_set_name, sep = "_")]] <- list(
+      balanced_accuracy = mean(class_accuracies),
+      mean_sensitivity = mean(sensitivity, na.rm = TRUE),
+      mean_specificity = mean(specificity, na.rm = TRUE),
+      overall_accuracy = sum(diag(confusion_matrix)) / sum(confusion_matrix)
+    )
+  }
+  
+  # 将 per_class_results_all 转换为一个数据框
+  per_class_results_df <- do.call(rbind, per_class_results_all)
+  
+  # 保存结果
+  saveRDS(list(overall_results = results, per_class_results = per_class_results_df), output_path)
+  
+  # 返回结果
+  return(list(overall_results = results, per_class_results = per_class_results_df))
+}
+
+results <- list()
+run_modeling(
+  p_value_threshold = 0.05,
+  auc_threshold = 0.6,
+  expr_representative_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/expr_representative_log.RDS",
+  top200_genes_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/progressed_data/一组比剩余其他组的前200个上下调基因_log_来自UROMOL和dejongA.RDS",
+  output_path = "D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_alldata_acu_spe_sen_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS"
+)
+
+results_core_samples <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_alldata_acu_spe_sen_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS")
+
+results <- results_core_samples[["per_class_results"]]
+results$ValidationSet
+results$Platform <- c("RNA_seq","RNA_seq","RNA_seq",
+                      "RNA_seq","RNA_seq","RNA_seq",
+                      "Illumina","Illumina","Illumina",
+                      "Affymetrix","Affymetrix",
+                      "Illumina","Illumina","Illumina",
+                      "Illumina","Illumina","Illumina",
+                      "Illumina","Illumina",
+                      "Affymetrix","Affymetrix",
+                      "Affymetrix","Affymetrix",
+                      "Illumina","Illumina","Illumina",
+                      "Illumina","Illumina","Illumina",
+                      "Affymetrix","Affymetrix",
+                      "RNA_seq","RNA_seq","RNA_seq")
+library(dplyr)
+mean_result <- results %>% 
+  group_by(Platform, Class) %>% 
+  summarise(
+    across(c(Accuracy, Sensitivity, Specificity), \(x) mean(x, na.rm = TRUE), .names = "mean_{.col}"),
+    .groups = "drop"  # 可选：移除分组信息
+  )
+#### 作图 ####
+library(ggplot2)
+library(dplyr)
+colors <- c("1" = "#80C5A2", "2" = "#C77CA2", "3" = "#4681B3")
+# mean_Accuracy 散点图
+ggplot(mean_result, aes(x = Class, y = mean_Accuracy, color = Class)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = colors) +
+  scale_y_continuous(limits = c(0, 1)) +  # 设置 y 轴范围为 0 到 1
+  facet_wrap(~ Platform) +
+  labs(title = "Mean Accuracy by Class and Platform",
+       x = "Class",
+       y = "Mean Accuracy") +
+  theme_minimal()
+
+# mean_Sensitivity 散点图
+ggplot(mean_result, aes(x = Class, y = mean_Sensitivity, color = Class)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = colors) +
+  scale_y_continuous(limits = c(0, 1)) +  # 设置 y 轴范围为 0 到 1
+  facet_wrap(~ Platform) +
+  labs(title = "Mean Sensitivity by Class and Platform",
+       x = "Class",
+       y = "Mean Sensitivity") +
+  theme_minimal()
+
+# mean_Specificity 散点图
+ggplot(mean_result, aes(x = Class, y = mean_Specificity, color = Class)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = colors) +
+  scale_y_continuous(limits = c(0, 1)) +  # 设置 y 轴范围为 0 到 1
+  facet_wrap(~ Platform) +
+  labs(title = "Mean Specificity by Class and Platform",
+       x = "Class",
+       y = "Mean Specificity") +
+  theme_minimal()
+
+#### 各平台的overall accuracy ####
+results_core_samples <- readRDS("D:/OneDrive - 中山大学/R_workplace/MCL/dataset/coresample_log后分群_建模后log_Avsallothers_UR_deA_P0.05AUC0.6.RDS")
+results_OA <- results_core_samples[c(393:405),]
+results_OA$Platform <- c("RNA_seq","RNA_seq",
+                      "Illumina","Affymetrix",
+                      "Illumina","Illumina",
+                      "Illumina","Affymetrix",
+                      "Affymetrix","Illumina",
+                      "Illumina","Affymetrix",
+                      "RNA_seq")
+meanOA_result <- results_OA %>% 
+  group_by(Platform) %>% 
+  summarise(
+    across(overall_accuracy, \(x) mean(x, na.rm = TRUE), .names = "mean_{.col}"),
+    .groups = "drop"  # 可选：移除分组信息
+  )
+
+# mean_Accuracy 散点图
+# 加载必要的包
+library(ggplot2)
+library(RColorBrewer)
+set3_colors <- brewer.pal(n = 3, name = "Set1")  # 假设有 3 个 Class
+ggplot(meanOA_result, aes(x = Platform, y = mean_overall_accuracy, color = Platform)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = set3_colors) +  # 使用 Set3 调色板
+  scale_y_continuous(limits = c(0, 1)) +  # 设置 y 轴范围为 0 到 1
+  theme_minimal()

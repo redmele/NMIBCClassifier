@@ -1,0 +1,19 @@
+Package: NMIBCClassifier
+Type: Package
+Title: Single-sample classifier of non-muscle-invasive bladder cancer consensus subtypes
+Version: 0.1.0
+Author: Kezhi Liu[aut, cre]
+Maintainer: Kezhi Liu <liukzh6@mail2.sysu.edu.cn>
+Description: A transcriptomic model for predicting 
+  non-muscle-invasive bladder cancer (NMIBC) consensus subtypes. 
+  This approach utilizes a single-sample classifier based on 
+  the Pearson nearest-centroid method, which evaluates the correlation 
+  between the transcriptomic profile of an individual sample and 
+  the representative profiles of the three NMIBC consensus groups (cluster 1,2,3) 
+  as outlined in Liu et al (to be published).
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+LazyDataCompression: xz
+Depends: R (>= 2.10)
+RoxygenNote: 7.3.2
