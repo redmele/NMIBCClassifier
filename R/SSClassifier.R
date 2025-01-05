@@ -27,10 +27,15 @@
 classify_nmibc <- function(data, cor_cut = 0.1) {
   # Load the centroids matrix from the NMIBCClassifier package
   centroids <- NMIBCClassifier::centroids
-
+ 
   # Identify common genes between the input data and the centroids
   common_genes <- intersect(rownames(centroids), rownames(data))
-
+ 
+  # Check if the number of common genes is less than half of the centroid genes
+  if (length(common_genes) < nrow(centroids) / 2) {
+    warning("The number of common genes is less than half of the centroid genes. The results may be unstable.")
+  }
+  
   # Define a helper function to calculate Pearson correlation
   pearson_correlation <- function(x, y) {
     cor(x, y, method = "pearson")
