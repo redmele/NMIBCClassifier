@@ -38,7 +38,7 @@ classify_nmibc <- function(data, cor_cut = 0.1) {
   
   # Define a helper function to calculate Pearson correlation
   pearson_correlation <- function(x, y) {
-    cor(x, y, method = "pearson")
+    cor(x, y, method = "pearson", use = "complete.obs")
   }
 
   results <- t(apply(data[common_genes, , drop = FALSE], 2, function(sample) {
