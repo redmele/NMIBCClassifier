@@ -42,8 +42,6 @@ classify_nmibc <- function(data, cor_cut = 0.1) {
   }
 
   results <- t(apply(data[common_genes, , drop = FALSE], 2, function(sample) {
-    # Extract expression values for the common genes in the sample
-    sample <- sample[common_genes]
 
     # Compute Pearson correlations between the sample and each centroid
     correlations <- apply(centroids[common_genes, , drop = FALSE],
