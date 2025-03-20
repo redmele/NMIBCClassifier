@@ -7,7 +7,7 @@
 #' @param cor_cut  A numeric value specifying the minimum Pearson correlation
 #' threshold for classification.Samples with a maximum correlation below this
 #' threshold will remain unclassified, and their classification results will be
-#' set to NA. Default value is 0.1.
+#' set to NA. Default value is 0.2.
 #'
 #' @return A dataframe containing classification results for each sample.
 #' The `consensus_cluster` column provides the predicted consensus class label
@@ -23,8 +23,8 @@
 #' # Example usage:
 #' # `data` is a gene expression matrix:
 #' data(tcgadat)
-#' classify_nmibc(dejongA, cor_cut = 0.1)
-classify_nmibc <- function(data, cor_cut = 0.1) {
+#' classify_nmibc(dejongA, cor_cut = 0.2)
+classify_nmibc <- function(data, cor_cut = 0.2) {
   # Load the centroids matrix from the NMIBCClassifier package
   centroids <- NMIBCClassifier::centroids
  
