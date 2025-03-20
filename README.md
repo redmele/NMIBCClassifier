@@ -34,7 +34,7 @@ library(NMIBCClassifier)
 
 data("dejongA")
 
-result <- classify_nmibc(dejongA,cor_cut = 0.1)
+result <- classify_nmibc(dejongA)
 head(result)
      consensus_cluster correlation_to_consensus_cluster_1 correlation_to_consensus_cluster_2
 R1                   3                  0.615020049284025                  0.709953064725233
