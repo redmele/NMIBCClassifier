@@ -21,11 +21,11 @@ library(NMIBCClassifier)
 ## Usage
 
 ``` r
-classify_nmibc(data, cor_cut = 0.1)
+classify_nmibc(data, cor_cut = 0.2)
 ```
 Where `data` is a dataframe with rows represent unique genes and columns represent samples. Gene identifiers (rownames) can be provided as HUGO gene symbols.RNA-seq data should be log-transformed, for example using log2(normalized counts + 1).
 
-`cor_cut`  is a numeric value specifying the minimum Pearson correlation threshold for classification.Samples with a maximum correlation below this threshold will remain unclassified, and their classification results will be set to NA. Default value is 0.1.
+`cor_cut`  is a numeric value specifying the minimum Pearson correlation threshold for classification.Samples with a maximum correlation below this threshold will remain unclassified, and their classification results will be set to NA. Default value is 0.2.
 
 ## Example
 
