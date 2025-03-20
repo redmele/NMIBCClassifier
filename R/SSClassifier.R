@@ -26,7 +26,7 @@
 #' classify_nmibc(dejongA, cor_cut = 0.2)
 classify_nmibc <- function(data, cor_cut = 0.2) {
   # Load the centroids matrix from the NMIBCClassifier package
-  centroids <- NMIBCClassifier::centroids
+  centroids <- NMIBCClassifier::centroids_4cmcs
  
   # Identify common genes between the input data and the centroids
   common_genes <- intersect(rownames(centroids), rownames(data))
