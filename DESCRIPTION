@@ -9,7 +9,7 @@ Description: A transcriptomic model for predicting
   This approach utilizes a single-sample classifier based on 
   the Pearson nearest-centroid method, which evaluates the correlation 
   between the transcriptomic profile of an individual sample and 
-  the representative profiles of the three NMIBC consensus groups (cluster 1,2,3) 
+  the representative profiles of the four NMIBC consensus clusters (CMC1-4) 
   as outlined in Liu et al (to be published).
 License: MIT + file LICENSE
 Encoding: UTF-8
