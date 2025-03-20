@@ -3,7 +3,7 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-A transcriptomic model for predicting non-muscle-invasive bladder cancer (NMIBC) consensus subtypes. This approach utilizes a single-sample classifier based on the Pearson nearest-centroid method, which evaluates the correlation between the transcriptomic profile of an individual sample and the representative profiles of the three NMIBC consensus groups (cluster 1,2,3) as described in Liu et al (to be published).
+A transcriptomic model for predicting non-muscle-invasive bladder cancer (NMIBC) consensus subtypes. This approach utilizes a single-sample classifier based on the Pearson nearest-centroid method, which evaluates the correlation between the transcriptomic profile of an individual sample and the representative profiles of the four NMIBC consensus clusters (CMC1-4) as described in Liu et al (to be published).
 
 ## Citation
 You can cite ...
@@ -36,23 +36,30 @@ data("dejongA")
 
 result <- classify_nmibc(dejongA,cor_cut = 0.1)
 head(result)
-#     consensus_cluster correlation_to_consensus_cluster_1 correlation_to_consensus_cluster_2
-#R1                   1                  0.622375078555726                  0.344249168079062
-#R10                  1                  0.661031953629024                  0.430581247870673
-#R100                 1                  0.609151076253045                  0.363211102037651
-#R105                 1                   0.65241067422918                  0.468824850632178
-#R108                 1                   0.62776099581035                  0.390511502972139
-#R11                  1                  0.643480455642961                  0.354965986849694
-#     correlation_to_consensus_cluster_3 normalized_difference               p_value
-#R1                    0.470076987240111     0.244704674983188  2.18947891281627e-90
-#R10                   0.569648494614646     0.138243633326179 1.24201813563067e-105
-#R100                   0.50630296106019     0.168838436312852  1.19687055940123e-85
-#R105                   0.59785028133111    0.0836289089882427 4.88183486773281e-102
-#R108                  0.527453480451906     0.159786154329262  2.21243686288274e-92
-#R11                    0.51128412713991     0.205439539528768  1.94927108685008e-98
+     consensus_cluster correlation_to_consensus_cluster_1 correlation_to_consensus_cluster_2
+R1                   3                  0.615020049284025                  0.709953064725233
+R10                  3                  0.618341583708948                  0.701746159370815
+R100                 3                  0.595296487937614                  0.711287595982398
+R105                 3                    0.6608163932423                  0.728995427667581
+R108                 3                  0.615290770820966                  0.711151843594884
+R11                  3                  0.613669640349605                   0.71223493452466
+     correlation_to_consensus_cluster_3 correlation_to_consensus_cluster_4 normalized_difference
+R1                    0.761157907307797                  0.730567653528214    0.0401891033199404
+R10                   0.739127244744341                  0.718764561738891    0.0275496312038855
+R100                  0.748335812411318                  0.711522549210876    0.0491935072328304
+R105                  0.754232178835922                  0.740848808975043    0.0177443633889165
+R108                  0.756398672762588                  0.715757671391593    0.0537296042873293
+R11                   0.749577035998255                  0.719597275535167    0.0399955695323056
+                   p_value
+R1   2.76647108611937e-263
+R10  1.79137685318766e-240
+R100 1.01868170552663e-249
+R105 7.47683498835475e-256
+R108 3.76523257100649e-258
+R11  5.38293473229588e-251
 ```
 
-The classifier returns a datafram with 6 columns:
+The classifier returns a datafram with 7 columns:
 
 `consensus_cluster` provides the predicted consensus class label for each sample. If the maximum correlation for a sample is below the specified cor_cut threshold, the classification result is set to NA, indicating low confidence in the prediction.
 
