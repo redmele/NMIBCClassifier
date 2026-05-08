@@ -10,13 +10,13 @@
 #' set to NA. Default value is 0.2.
 #'
 #' @return A dataframe containing classification results for each sample.
-#' The `consensus_cluster` column provides the predicted consensus class label
+#' The `IMC` column provides the predicted integrated molecular cluster label
 #' for each sample. Additional columns include the Pearson correlation values
 #' for each sample with each centroid, the `normalized_difference`
 #' (a measure of how distinct the sample is from other classes),
 #' and the `p_value` associated with the correlation to the nearest centroid.
 #' Samples with a maximum correlation below the `cor_cut` threshold will have
-#' NA in the `consensus_cluster` column.
+#' NA in the `IMC` column.
 #' @export
 #'
 #' @examples
@@ -26,7 +26,7 @@
 #' classify_nmibc(dejongA, cor_cut = 0.2)
 classify_nmibc <- function(data, cor_cut = 0.2) {
   # Load the centroids matrix from the NMIBCClassifier package
-  centroids <- NMIBCClassifier::centroids_4cmcs
+  centroids <- NMIBCClassifier::centroids_4imcs
  
   # Identify common genes between the input data and the centroids
   common_genes <- intersect(rownames(centroids), rownames(data))
@@ -84,8 +84,8 @@ classify_nmibc <- function(data, cor_cut = 0.2) {
   results_df <- as.data.frame(results)
 
   colnames(results_df) <- c(
-    "consensus_cluster",
-    paste0("correlation_to_consensus_cluster_", seq_len(ncol(centroids))),
+    "IMC",
+    paste0("correlation_to_IMC_", seq_len(ncol(centroids))),
     "normalized_difference",
     "p_value"
   )
