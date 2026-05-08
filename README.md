@@ -3,10 +3,10 @@
 <!-- badges: start -->
 <!-- badges: end -->
 
-A transcriptomic model for predicting non-muscle-invasive bladder cancer (NMIBC) consensus subtypes. This approach utilizes a single-sample classifier based on the Pearson nearest-centroid method, which evaluates the correlation between the transcriptomic profile of an individual sample and the representative profiles of the four NMIBC consensus clusters (CMC1-4) as described in Liu et al (to be published).
+A transcriptomic model for predicting non-muscle-invasive bladder cancer (NMIBC) consensus subtypes. This approach utilizes a single-sample classifier based on the Pearson nearest-centroid method, which evaluates the correlation between the transcriptomic profile of an individual sample and the representative profiles of the four NMIBC integrated molecular clusters (IMC1-4) as described in Liu et al (to be published).
 
 ## Citation
-You can cite ...
+You can cite "An integrated Molecular Classification System Identifies Distinct Prognostic Clusters of Non-muscle-invasive Bladder Cancer".
 
 ## Installation
 
