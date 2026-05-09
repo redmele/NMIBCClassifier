@@ -36,7 +36,7 @@ data("dejongA")
 
 results <- classify_nmibc(dejongA)
 
-The classifier returns a datafram with 7 columns:
+# The classifier returns a datafram with 7 columns:
 
 head(results)
      IMC correlation_to_IMC_1 correlation_to_IMC_2 correlation_to_IMC_3 correlation_to_IMC_4 normalized_difference
