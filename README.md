@@ -34,9 +34,25 @@ library(NMIBCClassifier)
 
 data("dejongA")
 
-classify_nmibc(dejongA)
+results <- classify_nmibc(dejongA)
 
 The classifier returns a datafram with 7 columns:
+
+head(results)
+     IMC correlation_to_IMC_1 correlation_to_IMC_2 correlation_to_IMC_3 correlation_to_IMC_4 normalized_difference
+R1     3    0.615020049284025    0.709953064725233    0.761157907307797    0.730567653528214    0.0401891033199404
+R10    3    0.618341583708948    0.701746159370815    0.739127244744341    0.718764561738891    0.0275496312038855
+R100   3    0.595296487937614    0.711287595982398    0.748335812411318    0.711522549210876    0.0491935072328304
+R105   3      0.6608163932423    0.728995427667581    0.754232178835922    0.740848808975043    0.0177443633889165
+R108   3    0.615290770820966    0.711151843594884    0.756398672762588    0.715757671391593    0.0537296042873293
+R11    3    0.613669640349605     0.71223493452466    0.749577035998255    0.719597275535167    0.0399955695323056
+                   p_value
+R1   2.76647108611937e-263
+R10  1.79137685318766e-240
+R100 1.01868170552663e-249
+R105 7.47683498835475e-256
+R108 3.76523257100649e-258
+R11  5.38293473229588e-251
 
 `IMC` provides the predicted IMC label for each sample. If the maximum correlation for a sample is below the specified cor_cut threshold, the classification result is set to NA, indicating low confidence in the prediction.
 
