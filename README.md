@@ -53,7 +53,6 @@ R100 1.01868170552663e-249
 R105 7.47683498835475e-256
 R108 3.76523257100649e-258
 R11  5.38293473229588e-251
-
 ```
 
 `IMC` provides the predicted IMC label for each sample. If the maximum correlation for a sample is below the specified cor_cut threshold, the classification result is set to NA, indicating low confidence in the prediction.
